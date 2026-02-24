@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Ops Health Dashboard</title>
+    <style>
+        :root {
+            --bg-dark: #0f111a;
+            --bg-panel: #1a1d2e;
+            --text-main: #ffffff;
+            --text-muted: #8b949e;
+            
+            /* Light to Dark Green Spectrum */
+            --color-1: #f7fee7; /* PENDING - Lightest */
+            --color-2: #d9f99d; /* PROCESSING */
+            --color-3: #a3e635; /* RETRY */
+            --color-4: #4ade80; /* CANCELLED */
+            --color-5: #16a34a; /* FAILED */
+            --color-6: #14532d; /* SUCCESS - Darkest */
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            margin: 0;
+            padding: 30px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 20px;
+        }
+
+        .title-area h1 { margin: 0; font-size: 24px; }
+        .title-area p { margin: 5px 0 0; color: var(--text-muted); font-size: 14px; }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            gap: 15px;
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 12px;
+            align-items: center;
+        }
+
+        .legend-item { display: flex; align-items: center; gap: 6px; }
+        .dot { width: 12px; height: 12px; border-radius: 2px; }
+
+        /* Dashboard Grid */
+        .service-row {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            align-items: start;
+            padding: 20px 0;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .service-info {
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 13px;
+            color: #58a6ff;
+        }
+
+        .tiles-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        /* The Tiles */
+        .tile {
+            width: 24px;
+            height: 24px;
+            border-radius: 3px;
+            cursor: help;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .tile:hover {
+            transform: scale(1.3);
+            z-index: 10;
+            box-shadow: 0 0 12px rgba(255,255,255,0.2);
+        }
+
+        /* State Color Assignments */
+        .PENDING { background-color: var(--color-1); outline: 1px solid #d9f99d; }
+        .PROCESSING { background-color: var(--color-2); }
+        .RETRY { background-color: var(--color-3); }
+        .CANCELLED { background-color: var(--color-4); }
+        .FAILED { background-color: var(--color-5); }
+        .SUCCESS { background-color: var(--color-6); }
+
+        /* Tooltip (CSS only) */
+        .tile .tooltip {
+            visibility: hidden;
+            width: 180px;
+            background-color: #f0f6fc;
+            color: #0d1117;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px;
+            position: absolute;
+            z-index: 100;
+            bottom: 150%;
+            left: 50%;
+            margin-left: -90px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 11px;
+            line-height: 1.4;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        }
+
+        .tile:hover .tooltip { visibility: visible; opacity: 1; }
+
+        .status-tag {
+            font-size: 10px;
+            background: #30363d;
+            padding: 2px 6px;
+            border-radius: 10px;
+            float: right;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="title-area">
+            <h1>API Transaction Monitor</h1>
+            <p id="lastUpdated">Initializing...</p>
+        </div>
+        <div class="legend">
+            <div class="legend-item"><div class="dot PENDING"></div> Pending</div>
+            <div class="legend-item"><div class="dot PROCESSING"></div> Processing</div>
+            <div class="legend-item"><div class="dot RETRY"></div> Retry</div>
+            <div class="legend-item"><div class="dot CANCELLED"></div> Cancelled</div>
+            <div class="legend-item"><div class="dot FAILED"></div> Failed</div>
+            <div class="legend-item"><div class="dot SUCCESS"></div> Success</div>
+        </div>
+    </header>
+
+    <main id="dashboard-root">
+        </main>
+
+    <script>
+        const API_URL = 'http://localhost:8080/api/transactions?page=0&size=100&sort=timestamp';
+
+        // Sample data used if the API is unreachable (for your local testing)
+        const sampleData = [
+            { "transactionId": "txn-2", "serviceName": "claim_service", "user": "Frank", "stateName": "PENDING", "stateDescription": "Waiting" },
+            { "transactionId": "txn-5", "serviceName": "transaction_service", "user": "Heidi", "stateName": "SUCCESS", "stateDescription": "Finished" },
+            { "transactionId": "txn-6", "serviceName": "claim_service", "user": "Grace", "stateName": "PROCESSING", "stateDescription": "Active" },
+            { "transactionId": "txn-7", "serviceName": "notification_service", "user": "Dave", "stateName": "RETRY", "stateDescription": "Retrying" },
+            { "transactionId": "txn-8", "serviceName": "payment_service", "user": "Ivan", "stateName": "FAILED", "stateDescription": "Error" },
+            { "transactionId": "txn-12", "serviceName": "notification_service", "user": "Heidi", "stateName": "CANCELLED", "stateDescription": "Stopped" }
+        ];
+
+        async function fetchData() {
+            try {
+                const response = await fetch(API_URL);
+                const data = await response.json();
+                render(data.content);
+                document.getElementById('lastUpdated').innerText = `Live: Last updated at ${new Date().toLocaleTimeString()}`;
+            } catch (e) {
+                console.error("API Offline, using sample data provided in prompt", e);
+                // If API is down, use the huge block of data you provided in the prompt
+                // (Note: For brevity, I'm using a smaller subset, but logic is identical)
+                const mockContent = sampleData; 
+                render(mockContent);
+                document.getElementById('lastUpdated').innerText = `Demo Mode (Localhost 8080 Unreachable)`;
+            }
+        }
+
+        function render(data) {
+            const root = document.getElementById('dashboard-root');
+            root.innerHTML = '';
+
+            // Group transactions by Service Name
+            const groups = data.reduce((acc, item) => {
+                if (!acc[item.serviceName]) acc[item.serviceName] = [];
+                acc[item.serviceName].push(item);
+                return acc;
+            }, {});
+
+            // Create a row for each service
+            Object.keys(groups).sort().forEach(service => {
+                const row = document.createElement('div');
+                row.className = 'service-row';
+
+                const label = document.createElement('div');
+                label.className = 'service-info';
+                label.innerText = service.replace('_', ' ');
+
+                const grid = document.createElement('div');
+                grid.className = 'tiles-grid';
+
+                groups[service].forEach(txn => {
+                    const tile = document.createElement('div');
+                    tile.className = `tile ${txn.stateName}`;
+                    
+                    tile.innerHTML = `
+                        <div class="tooltip">
+                            <strong>${txn.transactionId}</strong> <span class="status-tag">${txn.stateName}</span><br>
+                            User: ${txn.user}<br>
+                            <em>${txn.stateDescription}</em>
+                        </div>
+                    `;
+                    grid.appendChild(tile);
+                });
+
+                row.appendChild(label);
+                row.appendChild(grid);
+                root.appendChild(row);
+            });
+        }
+
+        // Initial call
+        fetchData();
+
+        // Refresh every 10 seconds
+        setInterval(fetchData, 10000);
+    </script>
+</body>
+</html>
